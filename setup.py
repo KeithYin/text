@@ -27,12 +27,12 @@ long_description = read('README.rst')
 
 setup_info = dict(
     # Metadata
-    name='torchtext',
+    name='torchtext_yp',
     version=VERSION,
     author='PyTorch core devs and James Bradbury',
-    author_email='jekbradbury@gmail.com',
-    url='https://github.com/pytorch/text',
-    description='Text utilities and datasets for PyTorch',
+    author_email='ke1thyin@hotmail.com',
+    url='',
+    description='extended torchtext with big corpus',
     long_description=long_description,
     license='BSD',
 
