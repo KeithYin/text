@@ -171,6 +171,7 @@ class Field(RawField):
         except TypeError:
             raise ValueError("Stop words must be convertible to a set")
         self.is_target = is_target
+        self.vocab = None
 
     def __getstate__(self):
         str_type = dtype_to_attr(self.dtype)
@@ -286,6 +287,7 @@ class Field(RawField):
                 provided directly.
             Remaining keyword arguments: Passed to the constructor of Vocab.
         """
+        assert self.vocab is None, "vocab has already been built."
         counter = Counter()
         sources = []
         for arg in args:
@@ -302,6 +304,25 @@ class Field(RawField):
                     counter.update(x)
                 except TypeError:
                     counter.update(chain.from_iterable(x))
+        specials = list(OrderedDict.fromkeys(
+            tok for tok in [self.unk_token, self.pad_token, self.init_token,
+                            self.eos_token] + kwargs.pop('specials', [])
+            if tok is not None))
+        self.vocab = self.vocab_cls(counter, specials=specials, **kwargs)
+
+    def build_vocab_from_vocab_file(self, vocab_file, **kwargs):
+        """using dumped vocabulary to construct Vocab object,
+        the words in vocab_file should be ordered ascent
+        """
+        assert self.vocab is None, "vocab has already been built."
+        counter = dict()
+        with open(vocab_file, encoding="utf8") as file:
+            for i, token in enumerate(file):
+                token = token.strip()
+                if token in counter:
+                    raise ValueError("duplicated token [{}]".format(token))
+                counter[token] = i + 10  # one can choose any value
+
         specials = list(OrderedDict.fromkeys(
             tok for tok in [self.unk_token, self.pad_token, self.init_token,
                             self.eos_token] + kwargs.pop('specials', [])

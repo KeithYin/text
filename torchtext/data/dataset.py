@@ -7,17 +7,26 @@ import shutil
 from functools import partial
 
 import torch.utils.data
-
+from torch.multiprocessing import Queue
+import torch.multiprocessing as multiprocessing
 from .utils import RandomShuffler
 from .example import Example
 from ..utils import download_from_url, unicode_csv_reader
 
 
 class Dataset(torch.utils.data.Dataset):
-    """Defines a dataset composed of Examples along with its Fields.
+    """
+    Defines
+    a
+    dataset
+    composed
+    of
+    Examples
+    along
+    with its Fields.
 
     Attributes:
-        sort_key (callable): A key to use for sorting dataset examples for batching
+    sort_key (callable): A key to use for sorting dataset examples for batching
             together examples with similar lengths to minimize padding.
         examples (list(Example)): The examples in this dataset.
         fields (dict[str, Field]): Contains the name of each column or field, together
@@ -142,7 +151,7 @@ class Dataset(torch.utils.data.Dataset):
         try:
             return len(self.examples)
         except TypeError:
-            return 2**32
+            return 2 ** 32
 
     def __iter__(self):
         for x in self.examples:
@@ -197,6 +206,114 @@ class Dataset(torch.utils.data.Dataset):
                             shutil.copyfileobj(gz, uncompressed)
 
         return os.path.join(path, cls.dirname)
+
+    def filter_examples(self, field_names):
+        """Remove unknown words from dataset examples with respect to given field.
+
+        Arguments:
+            field_names (list(str)): Within example only the parts with field names in
+                field_names will have their unknown words deleted.
+        """
+        for i, example in enumerate(self.examples):
+            for field_name in field_names:
+                vocab = set(self.fields[field_name].vocab.stoi)
+                text = getattr(example, field_name)
+                example_part = [word for word in text if word in vocab]
+                setattr(example, field_name, example_part)
+            self.examples[i] = example
+
+
+class BigDataset(torch.utils.data.Dataset):
+    """this is used for big dataset that couldn't be fitted in memory
+    USAGE:
+        big_dataset = BigDataset(...)
+        # one epoch
+        while True:
+            try:
+                big_dataset.next_buffer()
+            except StopIteration:
+                break
+            some_iter = Iterator(big_dataset)
+            for data in some_iter:
+                training or something ....
+    """
+
+    sort_key = None
+
+    def __init__(self, files, fields, buffer_size=10000, split_fields_func=lambda x: x.split("\t"), filter_pred=None):
+        """Create a dataset form files
+        Arguments:
+            files: a list of file names
+            fields (List(tuple(str, Field))): The Fields to use in this tuple. The
+                string is a field name, and the Field is the associated field.
+            filter_pred (callable or None): Use only examples for which
+                filter_pred(example) is True, or use all examples if None.
+                Default is None.
+        """
+        if isinstance(files, str):
+            files = [files]
+        self.files = files
+
+        self.split_fields_func = split_fields_func
+        self.buffer_size = buffer_size
+        self.filter_pred = filter_pred
+        self.examples = []
+
+        self.current_queue = Queue(maxsize=self.buffer_size)
+        self.current_queue.cancel_join_thread()
+        p = multiprocessing.Process(target=_worker,
+                                    args=(self.current_queue, self.files, self.fields,
+                                          self.split_fields_func))
+        p.daemon = True
+        p.start()
+
+        self.fields = dict(fields)
+        self.is_last_buffer = False
+
+        # Unpack field tuples
+        for n, f in list(self.fields.items()):
+            if isinstance(n, tuple):
+                self.fields.update(zip(n, f))
+                del self.fields[n]
+
+    def __getitem__(self, i):
+        if len(self.examples) == 0:
+            raise ValueError("run next_buffer first")
+        return self.examples[i]
+
+    def __len__(self):
+        try:
+            return len(self.examples)
+        except TypeError:
+            return 2 ** 32
+
+    def __iter__(self):
+        if len(self.examples) == 0:
+            raise ValueError("run next_buffer first")
+        for x in self.examples:
+            yield x
+
+    def __getattr__(self, attr):
+        if attr in self.fields:
+            for x in self.examples:
+                yield getattr(x, attr)
+
+    def next_buffer(self):
+        if self.is_last_buffer:
+            raise StopIteration("empty buffer")
+        self.examples = []
+        for i in range(self.buffer_size):
+            cur_example = self.current_queue.get()
+            if cur_example is None:
+                self.is_last_buffer = True
+                break
+            self.examples.append(cur_example)
+
+        if self.filter_pred is not None:
+            make_list = isinstance(self.examples, list)
+            examples = filter(self.filter_pred, self.examples)
+            if make_list:
+                self.examples = list(examples)
 
     def filter_examples(self, field_names):
         """Remove unknown words from dataset examples with respect to given field.
@@ -357,3 +474,20 @@ def rationed_split(examples, train_ratio, test_ratio, val_ratio, rnd):
     data = tuple([examples[i] for i in index] for index in indices)
 
     return data
+
+
+def _worker(queue, files, fields, line_splitter_func):
+    """ read
+    queue: Queue with max_size
+        files: a list of files
+        fields: [('field_name', field1), ('field_name2', field2)]
+        line_splitter_func: func that split the line to the different fields
+    """
+    for file in files:
+        with open(file, encoding="utf8") as corpus:
+            for line in corpus:
+                infos = line_splitter_func(line)
+                example = Example.fromlist(infos, fields)
+                queue.put(example)
+    queue.put(None)
+    queue.close()
