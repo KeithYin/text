@@ -21,9 +21,8 @@ Installation
 
 Make sure you have Python 2.7 or 3.5+ and PyTorch 0.4.0 or newer. You can then install torchtext using pip::
 
-    pip install torchtext
-    
-For PyTorch versions before 0.4.0, please use `pip install torchtext==0.2.3`.
+    git clone git@github.com:keithyin/text.git
+    python setup.py install
 
 Optional requirements
 ---------------------
